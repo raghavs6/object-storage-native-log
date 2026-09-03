@@ -1,0 +1,62 @@
+# Local backing services for the object-storage log.
+#   docker compose up -d      bring everything up
+#   docker compose down       stop, keep data
+#   docker compose down -v    stop and wipe data (you'll want this often in M1)
+
+name: obj
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"   # S3 API      <- the Go client talks here
+      - "9001:9001"   # web console <- you look here
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      # MinIO's own recommended probe; `mc` ships inside the server image.
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  # One-shot container: creates the bucket, then exits.
+  # Keeps environment setup out of the application code entirely.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/obj &&
+      mc ls local &&
+      echo 'bucket ready: obj'
+      "
+
+  postgres:
+    image: postgres:16.8-alpine
+    environment:
+      POSTGRES_USER: obj
+      POSTGRES_PASSWORD: obj
+      POSTGRES_DB: obj
+    ports:
+      # 5433 on the HOST because drift-postgres already owns 5432.
+      # Container still listens on 5432 internally.
+      - "5433:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obj -d obj"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+volumes:
+  minio-data:
+  pg-data:
