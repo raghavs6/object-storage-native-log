@@ -1,16 +1,3 @@
-# Project brief: object-storage-native log
-
-Paste this into a coding agent at the start of the project. It contains the concept, the architecture, the data model, a milestone plan, and the open questions worth working through.
-
----
-
-## Who I am (calibrate to this)
-
-Rising sophomore CS student. Comfortable with Go, Python, Docker, Postgres, Redis, gRPC. Currently doing systems research: formal verification of HBase's region split protocol (TLA+, invariants, rollback correctness) and TLA+ specs for the CORFU shared log at NYU.
-
-So: I understand distributed systems concepts and protocol reasoning reasonably well. I have less experience with production-grade Go services, benchmarking methodology, and object storage APIs. Explain build/tooling decisions more than protocol concepts. Don't hand me finished code without explaining the design choice behind it — I'm building this to learn.
-
----
 
 ## What I'm building
 
