@@ -1,0 +1,10 @@
+# Build artifacts
+/bin/
+*.exe
+
+# Local environment / secrets — never commit real S3 credentials
+.env
+.env.local
+
+# macOS
+.DS_Store
