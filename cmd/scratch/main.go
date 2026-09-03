@@ -41,7 +41,30 @@ const (
 	// once — there is no one topic it could be named after. All the structure
 	// lives in Postgres instead.
 	key = "scratch/hello.txt"
+
+	// The slice to range-GET, expressed HALF-OPEN [start, end) — Go's
+	// convention, and the convention segments.byte_start/byte_end will use.
+	// Over the wire this becomes the inclusive "bytes=5-10"; see rangeHeader.
+	//
+	//	h  e  l  l  o  ␣  w  o  r  l  d
+	//	0  1  2  3  4  5  6  7  8  9  10
+	//
+	// so [5, 11) is " world".
+	rangeStart = 5
+	rangeEnd   = 11
 )
+
+// rangeHeader converts a half-open [start, end) byte range into an HTTP Range
+// header value.
+//
+// This is the single place in the project where the two conventions meet.
+// HTTP ranges are INCLUSIVE on both ends: "bytes=5-10" returns six bytes,
+// 5 through 10. Go slices are half-open: data[5:10] returns five, 5 through 9.
+// Everything inside this system speaks half-open; the -1 lives here and
+// nowhere else.
+func rangeHeader(start, end int) string {
+	return fmt.Sprintf("bytes=%d-%d", start, end-1)
+}
 
 func main() {
 	ctx := context.Background()
@@ -94,6 +117,55 @@ func main() {
 		log.Fatalf("MISMATCH\n  wrote %q\n  read  %q", original, retrieved)
 	}
 	fmt.Println("round-trip OK: bytes identical")
+
+	// ---- range GET ---------------------------------------------------------
+	//
+	// The primitive the whole architecture rests on. One object will hold
+	// records for many (topic, partition) pairs interleaved; a consumer reading
+	// one partition must pull its slice out of the middle without downloading
+	// the rest. S3 bills per request, not per byte fetched, so a small slice
+	// costs the same request fee as the whole object — cheap, not merely less
+	// wasteful.
+	//
+	// Note Range is a raw string, not two int fields. The SDK gives no help
+	// here and the compiler cannot catch a malformed one.
+	hdr := rangeHeader(rangeStart, rangeEnd)
+	partial, err := client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(hdr),
+	})
+	if err != nil {
+		log.Fatalf("range get: %v", err)
+	}
+	defer partial.Body.Close()
+
+	slice, err := io.ReadAll(partial.Body)
+	if err != nil {
+		log.Fatalf("read range body: %v", err)
+	}
+
+	// The server answers 206 Partial Content, not 200, and reports
+	// ContentRange as "bytes 5-10/30" — the slice served, then the object's
+	// full size. That trailing total is how you learn an object's size without
+	// downloading it.
+	fmt.Printf("GET  %s/%s  Range: %s\n", bucket, key, hdr)
+	fmt.Printf("     ContentRange: %s  (%d bytes)\n",
+		aws.ToString(partial.ContentRange), len(slice))
+	fmt.Printf("     %q\n", slice)
+
+	// ---- verify the range --------------------------------------------------
+	if want := original[rangeStart:rangeEnd]; !bytes.Equal(want, slice) {
+		log.Fatalf("RANGE MISMATCH\n  want %q\n  got  %q", want, slice)
+	}
+	fmt.Println("range OK: matches original[5:11]")
+
+	// The off-by-one, made visible. These two look like they ask for the same
+	// thing and do not. Getting this wrong in step 9 would silently drop the
+	// last byte of every partition's slice — bytes that decode as plausible
+	// garbage rather than an error.
+	fmt.Printf("\nhalf-open original[5:10] = %q   <- Go\n", original[5:10])
+	fmt.Printf("inclusive  bytes=5-10     = %q  <- HTTP\n", slice)
 }
 
 func newClient(ctx context.Context) *s3.Client {
