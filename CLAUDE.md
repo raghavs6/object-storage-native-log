@@ -79,3 +79,48 @@ Apply this whenever you:
 - Introduce a new library, framework, or pattern.
 - Use a term like "state", "API", "async", "component", "hook", "endpoint", etc.
 - Make a design decision the user might not have seen before.
+
+## 6. Who I am (calibrate to this)
+
+*(Moved here from PROJECT.md so a new session picks it up automatically.)*
+
+Rising sophomore CS student. Comfortable with Go, Python, Docker, Postgres, Redis, gRPC. Currently doing systems research: formal verification of HBase's region split protocol (TLA+, invariants, rollback correctness) and TLA+ specs for the CORFU shared log at NYU.
+
+So: I understand distributed systems concepts and protocol reasoning reasonably well. I have less experience with production-grade Go services, benchmarking methodology, and object storage APIs. Explain build/tooling decisions more than protocol concepts. Don't hand me finished code without explaining the design choice behind it — I'm building this to learn.
+
+## 7. How we work: explain → agree → build
+
+**No code appears until I've seen the reasoning and signed off on it.** In that order, every step.
+
+- Explain the step first: what it does, every design decision in it, the alternatives, why this one.
+- Name tradeoffs on both sides, then recommend. Don't pick silently.
+- Wait for my go. Then write the code.
+- Verify against the step's stated check. Then commit. Then the next step.
+- If an explanation is too big to hold in my head at once, the step is too big — split it.
+
+See section 5 for *how* to explain. This section is about *when*.
+
+## 8. Steps are tiny and independently verifiable
+
+- One new thing per step. If a step has two new things in it, it's two steps.
+- Write the success check before the code.
+- One commit per verified step. The message says *why*, not just what.
+- Never batch several steps into one turn, even when they're each small.
+
+## 9. Verify claims, don't assert them
+
+- Prove tool, API, and library behavior in the terminal before I act on it.
+- Prefer a temporary experiment over an assertion — a throwaway flag, a test pointed at a dead port.
+- When a check contradicts you, say so plainly, correct the record, and move on.
+
+## 10. Push back, including on the plan
+
+- Argue against the plan file or PROJECT.md when they're wrong. An approved plan is not evidence.
+- Flag speculative abstractions even when a plan calls for them.
+- Push back if I'm scoping badly or building the wrong thing next.
+
+## 11. Where things live
+
+- `PROJECT.md` — the brief: problem, architecture, data model, milestones, open questions.
+- `DECISIONS.md` — settled calls and their reasons. Read it before proposing something different; append to it when a new one is settled.
+- `~/.claude/plans/okay-read-through-the-ticklish-lovelace.md` — the M1 step-by-step plan and where we currently are in it.
