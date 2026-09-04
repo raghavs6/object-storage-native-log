@@ -25,13 +25,13 @@ func TestRangeHeader(t *testing.T) {
 	}
 }
 
-// testConfig points at the local Compose stack.
+// testS3Config points at the local Compose stack.
 //
 // These credentials are not secrets — they are the dev-only values in
 // docker-compose.yml, already committed. Real credentials arrive through the
 // environment and never through a file in this repo.
-func testConfig() Config {
-	return Config{
+func testS3Config() S3Config {
+	return S3Config{
 		Endpoint:  envOr("OBJ_S3_ENDPOINT", "http://localhost:9000"),
 		Region:    envOr("OBJ_S3_REGION", "us-east-1"),
 		Bucket:    envOr("OBJ_S3_BUCKET", "obj"),
@@ -52,7 +52,7 @@ func envOr(key, fallback string) string {
 func TestS3StoreRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
-	store, err := NewS3Store(ctx, testConfig())
+	store, err := NewS3Store(ctx, testS3Config())
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}

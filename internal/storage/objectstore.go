@@ -29,13 +29,13 @@ type ObjectStore interface {
 	GetRange(ctx context.Context, key string, start, end int) ([]byte, error)
 }
 
-// Config is everything needed to reach an S3-compatible endpoint.
+// S3Config is everything needed to reach an S3-compatible endpoint.
 //
 // Passed in explicitly rather than read from the environment here: a package
 // that reaches into os.Getenv is awkward to test and surprising to call.
 // Reading the environment is the program's job, not the library's — which is
 // also what keeps real AWS credentials out of every file in this repo.
-type Config struct {
+type S3Config struct {
 	Endpoint  string // http://localhost:9000 for MinIO; empty for real AWS
 	Region    string
 	Bucket    string
@@ -55,7 +55,7 @@ type S3Store struct {
 // surface at the call site, with a worse error message.
 var _ ObjectStore = (*S3Store)(nil)
 
-func NewS3Store(ctx context.Context, cfg Config) (*S3Store, error) {
+func NewS3Store(ctx context.Context, cfg S3Config) (*S3Store, error) {
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		// Region is an input to the request signing algorithm, so it must be
 		// set even against MinIO, which ignores it entirely.
