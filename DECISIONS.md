@@ -29,6 +29,27 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   tables one apart forever. `end_offset - start_offset` is the record count.
 - **The half-open convention is recorded in the database itself**, via `COMMENT ON COLUMN`. The
   person who needs it is reading `\d+ segments` in psql, not the Go source.
+- **Offset assignment is ONE statement — an upsert, not a bare `UPDATE`.**
+
+  ```sql
+  INSERT INTO partition_offsets (topic, partition, next_offset) VALUES ($1, $2, $3)
+  ON CONFLICT (topic, partition)
+  DO UPDATE SET next_offset = partition_offsets.next_offset + $3
+  RETURNING next_offset - $3
+  ```
+
+  Not a SELECT then an UPDATE: the gap between them is where two writers both read the same number
+  and both believe they own the same offsets. One statement holds a row lock throughout, so a second
+  writer waits and then re-reads the fresh value — no lost updates at `READ COMMITTED`.
+
+  Not the bare `UPDATE` earlier versions of the plan called for: a partition nobody has written has
+  no row, so `UPDATE` matches zero rows and assigns nothing *without reporting an error*. Verified
+  against the live database, and the concurrency test was verified to catch the naive version
+  (it lost 49 of 50 reservations).
+- **`AssignOffsets` is a free function taking a one-method `querier` interface**, not a method on
+  `PostgresStore`. Step 10 must assign offsets inside the same transaction that writes the segment
+  rows — assign 0-2, crash before the rows land, and `next_offset` says 3 while nothing claims 0, 1
+  or 2. Both `*pgxpool.Pool` and `pgx.Tx` satisfy `querier` unchanged.
 
 ## Process and infrastructure
 
@@ -66,9 +87,5 @@ the case.
 - **Record framing is a 4-byte big-endian length prefix + protobuf**, concatenated (step 8).
   Protobuf because gRPC already brings it in. The length prefix is what makes a byte range
   self-describing.
-- **Offset assignment uses one statement**, `UPDATE partition_offsets SET next_offset =
-  next_offset + $1 ... RETURNING next_offset` — not a SELECT then an UPDATE (step 7). The
-  single-statement form takes a row lock and re-reads, so it is free of lost updates at
-  `READ COMMITTED`.
 - **`Append` does not return until its flush has committed to Postgres** (step 13). Early-acking
   would make the system look fast and be wrong, and would hide the latency M3 exists to measure.
