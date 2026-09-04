@@ -51,6 +51,11 @@ services:
       - "5433:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data
+      # Postgres runs *.sql from here ONCE, on first start with an empty data
+      # directory, then never again. Changing migrations/ means:
+      #   docker compose down -v && docker compose up -d
+      # Read-only so the container can't write back into the repo.
+      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U obj -d obj"]
       interval: 3s

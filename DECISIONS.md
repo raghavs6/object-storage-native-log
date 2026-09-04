@@ -23,6 +23,12 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 - **`GetRange` returns `[]byte`, not the SDK's response body.** The body is an open connection the
   caller must close, and forgetting leaks it. Cost: a range must fit in memory, which is fine because
   ranges are bounded by the flush size.
+- **Offsets are half-open too: `[start_offset, end_offset)`.** `partition_offsets.next_offset`
+  already means "the number the next record will get", which is an excluded end. Matching it makes
+  the last segment's `end_offset` and `next_offset` the same number; the other choice leaves the two
+  tables one apart forever. `end_offset - start_offset` is the record count.
+- **The half-open convention is recorded in the database itself**, via `COMMENT ON COLUMN`. The
+  person who needs it is reading `\d+ segments` in psql, not the Go source.
 
 ## Process and infrastructure
 
@@ -34,6 +40,24 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   This is also what keeps real credentials out of every file in the repo.
 - **Integration tests fail loudly when MinIO is down; they don't skip.** A test that silently skips
   is a test that quietly stops running.
+- **The schema is applied by Postgres itself**, from `migrations/` mounted at
+  `/docker-entrypoint-initdb.d`. It runs only on first start with an empty data directory, so a
+  schema change means `docker compose down -v && docker compose up -d`. That reset is free in M1:
+  `minio-init` recreates the bucket and the tests re-PUT their objects. Real migration tooling
+  (`goose`, `golang-migrate`) waits until there is data worth keeping.
+- **No `CREATE TABLE IF NOT EXISTS`.** It silently does nothing when a table of that name exists with
+  a *different* shape, which looks exactly like success. Plain `CREATE TABLE` errors loudly, leaving
+  one way to apply the schema instead of two.
+
+## Considered and declined
+
+Proposed and turned down. Don't re-pitch these unprompted; revisit only if something concrete makes
+the case.
+
+- **CHECK constraints on segment ranges** (`end_offset > start_offset`, `byte_end > byte_start`),
+  step 5. Revisit if step 9 or 10 produces a real range bug.
+- **A UNIQUE index on `(topic, partition, start_offset)`**, step 5. The index stays plain. Revisit if
+  M2's concurrent brokers make duplicate offset assignment a live problem.
 
 ## Settled, not yet built
 
