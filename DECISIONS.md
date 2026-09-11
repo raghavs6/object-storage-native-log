@@ -53,6 +53,16 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Process and infrastructure
 
+- **Step 8 is split into definition/generation (8a) and framing (8b).** Protobuf
+  tooling was not already present through gRPC. Step 8a defines `obj.v1.Record`
+  with only `bytes payload = 1`; empty and absent payloads mean the same thing.
+  Topic, partition, and offsets stay in metadata. Use the generated Go type
+  directly, without a handwritten wrapper.
+- **Commit generated protobuf Go code; pin the generation tools.** `protoc` 36.1
+  and `protoc-gen-go` v1.36.12 live under ignored `bin/`, with installation and
+  generation commands beside the definition. The Go protobuf dependency is also
+  v1.36.12. This adds generated code to the repo but keeps ordinary builds from
+  needing the generators.
 - **Postgres on host port 5433.** A `drift-postgres` container from another project owns 5432.
   Colliding risks a connection *succeeding* against the wrong database. Container still listens on
   5432 internally.
@@ -84,8 +94,8 @@ the case.
 
 - **Code stays partition-general** even though M1 only exercises one partition. Costs nearly
   nothing, stops M2 from being a rewrite.
-- **Record framing is a 4-byte big-endian length prefix + protobuf**, concatenated (step 8).
-  Protobuf because gRPC already brings it in. The length prefix is what makes a byte range
+- **Record framing is a 4-byte big-endian length prefix + protobuf**, concatenated (step 8b).
+  Protobuf will also be used by the planned gRPC API. The length prefix is what makes a byte range
   self-describing.
 - **`Append` does not return until its flush has committed to Postgres** (step 13). Early-acking
   would make the system look fast and be wrong, and would hide the latency M3 exists to measure.

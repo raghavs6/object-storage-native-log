@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package obj.v1;
+
+option go_package = "github.com/raghavs6/object-storage-native-log/proto/obj/v1";
+
+// Record holds the stored payload. Topic, partition, and offsets live in metadata.
+message Record {
+  // Empty payloads are allowed; absent and empty have the same meaning.
+  bytes payload = 1;
+}
