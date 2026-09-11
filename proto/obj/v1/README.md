@@ -7,8 +7,11 @@ and assigned offsets live in Postgres metadata.
 
 `record.pb.go` is generated and committed. Ordinary Go builds need only the
 protobuf Go dependency in `go.mod`, not the generation tools. Edit the definition
-and regenerate instead of editing the generated file. Length-prefix framing is
-the next step; this definition alone does not delimit concatenated records.
+and regenerate instead of editing the generated file. `EncodeRecords` and
+`DecodeRecords` in `internal/storage/format.go` delimit concatenated records with
+a four-byte big-endian length before each protobuf body. The length excludes the
+prefix. No bytes means no records; a zero-length frame means one empty record.
+Decoding malformed input returns an error and no partial records.
 
 ## Install the pinned tools
 

@@ -5,6 +5,15 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Storage
 
+- **Record framing is a 4-byte big-endian length prefix + protobuf**, concatenated
+  in input order (step 8b). The unsigned length counts the complete protobuf body,
+  excluding the prefix. Protobuf will also be used by the planned gRPC API.
+  The prefix preserves record boundaries inside an object or a complete-frame byte range.
+- **Malformed frames return an error and no partial records.** Incomplete prefixes,
+  truncated bodies, and protobuf decoding errors identify the frame's byte position.
+  The decoder checks available bytes before slicing and does not allocate from an
+  advertised length. Empty input means zero records; a zero-length frame means one
+  empty record. Encoding rejects nil record pointers, while empty payloads are valid.
 - **Byte ranges are half-open `[start, end)` everywhere**, matching Go slices — including
   `segments.byte_start` / `byte_end`. HTTP `Range` is inclusive on both ends, so the `-1` conversion
   is confined to `rangeHeader()` in `internal/storage/objectstore.go` and appears nowhere else.
@@ -94,8 +103,5 @@ the case.
 
 - **Code stays partition-general** even though M1 only exercises one partition. Costs nearly
   nothing, stops M2 from being a rewrite.
-- **Record framing is a 4-byte big-endian length prefix + protobuf**, concatenated (step 8b).
-  Protobuf will also be used by the planned gRPC API. The length prefix is what makes a byte range
-  self-describing.
 - **`Append` does not return until its flush has committed to Postgres** (step 13). Early-acking
   would make the system look fast and be wrong, and would hide the latency M3 exists to measure.
