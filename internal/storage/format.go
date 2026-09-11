@@ -4,10 +4,65 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 
 	objv1 "github.com/raghavs6/object-storage-native-log/proto/obj/v1"
 	"google.golang.org/protobuf/proto"
 )
+
+// PartitionKey identifies one ordered log within a topic.
+type PartitionKey struct {
+	Topic     string
+	Partition int
+}
+
+// PartitionRange describes one partition's framed records within an object.
+// Object keys and logical offsets are added later by the commit path, so this
+// is separate from Segment. ByteEnd is exclusive, matching Go slices.
+type PartitionRange struct {
+	Topic       string
+	Partition   int
+	RecordCount int
+	ByteStart   int
+	ByteEnd     int
+}
+
+// EncodeObject packs groups in topic order, then numeric partition order,
+// preserving record order within each group. Every nonempty group occupies one
+// contiguous byte range, including its framing bytes. Empty groups are skipped.
+// An encoding error returns neither partial object bytes nor partial ranges.
+func EncodeObject(groups map[PartitionKey][]*objv1.Record) ([]byte, []PartitionRange, error) {
+	keys := make([]PartitionKey, 0, len(groups))
+	for key, records := range groups {
+		if len(records) > 0 {
+			keys = append(keys, key)
+		}
+	}
+	// Map iteration order must not determine the physical object layout.
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Topic != keys[j].Topic {
+			return keys[i].Topic < keys[j].Topic
+		}
+		return keys[i].Partition < keys[j].Partition
+	})
+
+	var data []byte
+	var ranges []PartitionRange
+	for _, key := range keys {
+		records := groups[key]
+		body, err := EncodeRecords(records)
+		if err != nil {
+			return nil, nil, fmt.Errorf("encode object partition %s/%d: %w", key.Topic, key.Partition, err)
+		}
+		start := len(data)
+		data = append(data, body...)
+		ranges = append(ranges, PartitionRange{
+			Topic: key.Topic, Partition: key.Partition, RecordCount: len(records),
+			ByteStart: start, ByteEnd: len(data),
+		})
+	}
+	return data, ranges, nil
+}
 
 // EncodeRecords packs records in order, each preceded by a 4-byte big-endian
 // length. The length counts the protobuf body, excluding the prefix itself.

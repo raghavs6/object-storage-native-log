@@ -5,6 +5,16 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Storage
 
+- **Object layout groups framed records by `(topic, partition)`** (step 9).
+  `EncodeObject` accepts a map keyed by `PartitionKey`, matching the planned buffer,
+  and packs nonempty groups in topic order, then numeric partition order. Sorting
+  adds a little work but makes layout repeatable. Record order within each group
+  is preserved; there is no cross-partition record-order guarantee.
+- **Layout returns `PartitionRange`, not a partially filled `Segment`.** It records
+  topic, partition, record count, and a half-open byte range including framing.
+  The commit path will add the object key and assign logical offsets later.
+  Empty groups produce no range; empty-payload records still count and occupy their
+  frames. Encoding failures return no partial object or ranges.
 - **Record framing is a 4-byte big-endian length prefix + protobuf**, concatenated
   in input order (step 8b). The unsigned length counts the complete protobuf body,
   excluding the prefix. Protobuf will also be used by the planned gRPC API.
