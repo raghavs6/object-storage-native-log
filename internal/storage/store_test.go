@@ -158,7 +158,7 @@ func TestCommitRoundTrip(t *testing.T) {
 		t.Fatalf("object length = %d, want 36", len(objects.objects[key]))
 	}
 	for _, segment := range segments {
-		rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition)
+		rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition, 0)
 		if err != nil || !reflect.DeepEqual(rows, []Segment{segment}) {
 			t.Fatalf("stored segments = %+v, %v", rows, err)
 		}
@@ -181,7 +181,7 @@ func TestCommitRoundTrip(t *testing.T) {
 			segment.StartOffset != previous.EndOffset || segment.EndOffset != previous.EndOffset*2 {
 			t.Errorf("second segment = %+v after %+v", segment, previous)
 		}
-		rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition)
+		rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition, 0)
 		if err != nil || !reflect.DeepEqual(rows, []Segment{previous, segment}) {
 			t.Fatalf("repeated commit rows = %+v, %v", rows, err)
 		}
@@ -286,7 +286,7 @@ func TestCommitRollback(t *testing.T) {
 				assertEmptyCommitMetadata(t, pg)
 			} else {
 				for _, segment := range baseline {
-					rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition)
+					rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition, 0)
 					if err != nil || !reflect.DeepEqual(rows, []Segment{segment}) {
 						t.Fatalf("rollback changed existing rows: %+v, %v", rows, err)
 					}
@@ -335,7 +335,7 @@ func TestCommitMinIORoundTrip(t *testing.T) {
 		t.Fatalf("got %d segments, want 2", len(segments))
 	}
 	for _, segment := range segments {
-		rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition)
+		rows, err := pg.Segments(t.Context(), segment.Topic, segment.Partition, 0)
 		if err != nil || !reflect.DeepEqual(rows, []Segment{segment}) {
 			t.Fatalf("stored rows = %+v, %v", rows, err)
 		}

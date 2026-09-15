@@ -95,17 +95,18 @@ func insertSegment(ctx context.Context, q execer, s Segment) error {
 	return nil
 }
 
-// Segments returns one partition's segments in offset order.
-//
-// The (topic, partition, start_offset) index exists for exactly this shape.
-// Step 11 adds a "from this offset onward" filter; a consumer reading from the
-// middle of a partition has no reason to fetch what came before.
-func (p *PostgresStore) Segments(ctx context.Context, topic string, partition int) ([]Segment, error) {
+// Segments returns one partition's segments from fromOffset onward, in offset
+// order. It includes the segment containing fromOffset, even if it starts earlier.
+// Zero returns all segments; negative offsets are rejected.
+func (p *PostgresStore) Segments(ctx context.Context, topic string, partition int, fromOffset int64) ([]Segment, error) {
+	if fromOffset < 0 {
+		return nil, fmt.Errorf("query segments %s/%d: fromOffset must be nonnegative, got %d", topic, partition, fromOffset)
+	}
 	rows, err := p.pool.Query(ctx, `
 		SELECT object_key, topic, partition, start_offset, end_offset, byte_start, byte_end
 		FROM segments
-		WHERE topic = $1 AND partition = $2
-		ORDER BY start_offset`, topic, partition)
+		WHERE topic = $1 AND partition = $2 AND end_offset > $3
+		ORDER BY start_offset`, topic, partition, fromOffset)
 	if err != nil {
 		return nil, fmt.Errorf("query segments %s/%d: %w", topic, partition, err)
 	}

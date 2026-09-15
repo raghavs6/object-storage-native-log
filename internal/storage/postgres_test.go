@@ -34,9 +34,10 @@ func TestPostgresStoreSegmentRoundTrip(t *testing.T) {
 	// The test owns this topic name and deletes only its own rows, so it can
 	// never wipe something you were inspecting by hand.
 	const topic = "test-segment-round-trip"
+	const otherTopic = "test-segment-round-trip-other"
 	t.Cleanup(func() {
 		if _, err := store.pool.Exec(context.Background(),
-			`DELETE FROM segments WHERE topic = $1`, topic); err != nil {
+			`DELETE FROM segments WHERE topic IN ($1, $2)`, topic, otherTopic); err != nil {
 			t.Errorf("cleanup: %v", err)
 		}
 	})
@@ -45,47 +46,69 @@ func TestPostgresStoreSegmentRoundTrip(t *testing.T) {
 	// than coinciding with insertion order.
 	second := Segment{
 		ObjectKey: "obj-b", Topic: topic, Partition: 0,
-		StartOffset: 3, EndOffset: 5, ByteStart: 42, ByteEnd: 70,
+		StartOffset: 3, EndOffset: 6, ByteStart: 42, ByteEnd: 70,
 	}
 	first := Segment{
 		ObjectKey: "obj-a", Topic: topic, Partition: 0,
 		StartOffset: 0, EndOffset: 3, ByteStart: 0, ByteEnd: 42,
+	}
+	third := Segment{
+		ObjectKey: "obj-c", Topic: topic, Partition: 0,
+		StartOffset: 6, EndOffset: 8, ByteStart: 0, ByteEnd: 28,
 	}
 	// Same topic, different partition — must not appear in partition 0's results.
 	other := Segment{
 		ObjectKey: "obj-a", Topic: topic, Partition: 1,
 		StartOffset: 0, EndOffset: 9, ByteStart: 42, ByteEnd: 99,
 	}
-	for _, s := range []Segment{second, first, other} {
+	otherTopicSegment := first
+	otherTopicSegment.Topic = otherTopic
+	for _, s := range []Segment{second, third, first, other, otherTopicSegment} {
 		if err := store.InsertSegment(ctx, s); err != nil {
 			t.Fatalf("insert: %v", err)
 		}
 	}
 
-	got, err := store.Segments(ctx, topic, 0)
-	if err != nil {
-		t.Fatalf("segments: %v", err)
+	cases := []struct {
+		name       string
+		topic      string
+		partition  int
+		fromOffset int64
+		want       []Segment
+	}{
+		{"all", topic, 0, 0, []Segment{first, second, third}},
+		{"segment start", topic, 0, 3, []Segment{second, third}},
+		{"inside segment", topic, 0, 4, []Segment{second, third}},
+		{"last segment", topic, 0, 6, []Segment{third}},
+		{"at end", topic, 0, 8, nil},
+		{"beyond end", topic, 0, 9, nil},
+		{"unknown partition", topic, 99, 0, nil},
+		{"unknown topic", "test-segment-round-trip-unknown", 0, 0, nil},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := store.Segments(ctx, tc.topic, tc.partition, tc.fromOffset)
+			if err != nil {
+				t.Fatalf("segments: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %d segments, want %d: %+v", len(got), len(tc.want), got)
+			}
+			// Compare every field to catch swapped SQL columns as well as ordering.
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("segment %d:\n got %+v\nwant %+v", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
 
-	// Segment is comparable, so == checks every field. A column swapped in
-	// either the INSERT or the SELECT shows up here.
-	want := []Segment{first, second}
-	if len(got) != len(want) {
-		t.Fatalf("got %d segments, want %d: %+v", len(got), len(want), got)
+func TestSegmentsRejectNegativeOffset(t *testing.T) {
+	// No pool: invalid input must be rejected before querying the database.
+	store := &PostgresStore{}
+	got, err := store.Segments(t.Context(), "topic", 0, -1)
+	if err == nil || got != nil {
+		t.Fatalf("got %+v, %v; want no segments and an error", got, err)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("segment %d:\n got %+v\nwant %+v", i, got[i], want[i])
-		}
-	}
-
-	t.Run("unknown partition returns nothing", func(t *testing.T) {
-		got, err := store.Segments(ctx, topic, 99)
-		if err != nil {
-			t.Fatalf("segments: %v", err)
-		}
-		if len(got) != 0 {
-			t.Errorf("got %d segments, want 0", len(got))
-		}
-	})
 }
