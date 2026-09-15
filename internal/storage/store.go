@@ -10,7 +10,7 @@ import (
 	objv1 "github.com/raghavs6/object-storage-native-log/proto/obj/v1"
 )
 
-// Store commits record bytes to object storage and their locations to Postgres.
+// Store commits and fetches records using object storage and a Postgres index.
 type Store struct {
 	objects  ObjectStore
 	postgres *PostgresStore
@@ -19,6 +19,39 @@ type Store struct {
 // NewStore uses caller-owned dependencies; it does not open or close them.
 func NewStore(objects ObjectStore, postgres *PostgresStore) *Store {
 	return &Store{objects: objects, postgres: postgres}
+}
+
+// Fetch returns all records from fromOffset onward in one partition, in order.
+// The initial metadata lookup determines the segments read. Results fit in memory;
+// any lookup, read, or decoding failure returns no partial records.
+func (s *Store) Fetch(ctx context.Context, topic string, partition int, fromOffset int64) ([]*objv1.Record, error) {
+	segments, err := s.postgres.Segments(ctx, topic, partition, fromOffset)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s/%d from %d: %w", topic, partition, fromOffset, err)
+	}
+	var records []*objv1.Record
+	for _, segment := range segments {
+		data, err := s.objects.GetRange(ctx, segment.ObjectKey, segment.ByteStart, segment.ByteEnd)
+		if err != nil {
+			return nil, fmt.Errorf("fetch %s/%d object %s bytes [%d,%d): %w",
+				topic, partition, segment.ObjectKey, segment.ByteStart, segment.ByteEnd, err)
+		}
+		decoded, err := DecodeRecords(data)
+		if err != nil {
+			return nil, fmt.Errorf("decode %s/%d object %s offsets [%d,%d): %w",
+				topic, partition, segment.ObjectKey, segment.StartOffset, segment.EndOffset, err)
+		}
+		if int64(len(decoded)) != segment.EndOffset-segment.StartOffset {
+			return nil, fmt.Errorf("decode %s/%d object %s offsets [%d,%d): got %d records, want %d",
+				topic, partition, segment.ObjectKey, segment.StartOffset, segment.EndOffset,
+				len(decoded), segment.EndOffset-segment.StartOffset)
+		}
+		if fromOffset > segment.StartOffset {
+			decoded = decoded[fromOffset-segment.StartOffset:]
+		}
+		records = append(records, decoded...)
+	}
+	return records, nil
 }
 
 // Commit uploads one object, then assigns offsets and inserts all segment rows

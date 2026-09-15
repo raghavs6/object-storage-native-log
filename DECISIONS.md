@@ -5,12 +5,20 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Storage
 
+- **`Store.Fetch` reads all records from a requested offset** (step 11b). One
+  metadata lookup selects the segments; sequential range reads and decoding preserve
+  partition order. Decode the whole containing segment, then trim earlier records:
+  metadata indexes segments, not individual record byte positions. Check decoded
+  counts against offset ranges before slicing. Errors return no partial records and
+  preserve underlying causes; the caller's context reaches database and object reads.
+  Unknown partitions and offsets at/beyond the end return no records; negative offsets
+  are rejected by the lookup. Results fit in memory; limits and pagination are deferred.
 - **Segment lookup accepts a starting offset** (step 11a). `Segments` filters by
   topic, partition, and `end_offset > fromOffset`, ordered by `start_offset`.
   This includes a segment starting before the requested offset if it still contains
   that record, and excludes a segment ending exactly there. Zero returns all segments;
   negative offsets are rejected. Unknown partitions and offsets at or beyond the end
-  return no segments. Fetch will trim earlier records after decoding in the next step.
+  return no segments. Fetch trims earlier records after decoding.
 - **`Store.Commit` uploads one object before opening a metadata transaction** (step 10).
   It reuses `EncodeObject`, then reserves offsets and inserts every segment through
   the same `READ COMMITTED` transaction, in sorted topic/partition order. It returns
