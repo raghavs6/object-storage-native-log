@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -67,15 +68,21 @@ func NewPostgresStore(ctx context.Context, cfg PostgresConfig) (*PostgresStore, 
 
 func (p *PostgresStore) Close() { p.pool.Close() }
 
-// InsertSegment writes one row.
-//
-// Singular on purpose. Step 10 inserts several at once — one object yields one
-// row per partition — but that also needs the transaction, which step 7 settles.
+// InsertSegment writes one row outside a caller-owned transaction.
 func (p *PostgresStore) InsertSegment(ctx context.Context, s Segment) error {
+	return insertSegment(ctx, p.pool, s)
+}
+
+// Both a pool and a transaction can execute the same segment INSERT.
+type execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func insertSegment(ctx context.Context, q execer, s Segment) error {
 	// $1..$7 are placeholders, not string formatting. The values travel to
 	// Postgres separately from the query text, so a topic name containing SQL
 	// is data and can never become part of the statement.
-	_, err := p.pool.Exec(ctx, `
+	_, err := q.Exec(ctx, `
 		INSERT INTO segments
 			(object_key, topic, partition, start_offset, end_offset, byte_start, byte_end)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,

@@ -5,6 +5,24 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Storage
 
+- **`Store.Commit` uploads one object before opening a metadata transaction** (step 10).
+  It reuses `EncodeObject`, then reserves offsets and inserts every segment through
+  the same `READ COMMITTED` transaction, in sorted topic/partition order. It returns
+  `[]Segment` only after commit succeeds. Empty batches do no I/O; encoding failures
+  do not upload. `Store` receives caller-owned storage dependencies and does not close them.
+- **Upload and database commit are separate durability boundaries.** Uploading first
+  avoids holding database locks during object storage I/O. A database failure can leave
+  an unreferenced object; an upload error does not prove the object is absent, and a
+  lost connection during commit can leave its outcome unknown. No automatic retry or
+  object deletion is added in step 10. Deferred rollback uses a separate five-second
+  context so request cancellation does not prevent cleanup.
+- **Generate object keys with `github.com/google/uuid` v1.6.0.** Use the error-returning
+  `NewRandom` function for a version-4 UUID rather than maintaining our own UUID format.
+  One key names the whole batch, regardless of how many partitions it contains.
+- **Segment insertion shares one private `Exec` helper.** Both the existing standalone
+  `InsertSegment` method and the commit transaction use the same SQL. Transaction tests
+  use the real migration in isolated schemas; a test-only trigger rejects a later insert
+  to verify rollback without changing application tables or constraints.
 - **Object layout groups framed records by `(topic, partition)`** (step 9).
   `EncodeObject` accepts a map keyed by `PartitionKey`, matching the planned buffer,
   and packs nonempty groups in topic order, then numeric partition order. Sorting
@@ -12,7 +30,7 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   is preserved; there is no cross-partition record-order guarantee.
 - **Layout returns `PartitionRange`, not a partially filled `Segment`.** It records
   topic, partition, record count, and a half-open byte range including framing.
-  The commit path will add the object key and assign logical offsets later.
+  The commit path adds the object key and assigns logical offsets after encoding.
   Empty groups produce no range; empty-payload records still count and occupy their
   frames. Encoding failures return no partial object or ranges.
 - **Record framing is a 4-byte big-endian length prefix + protobuf**, concatenated
