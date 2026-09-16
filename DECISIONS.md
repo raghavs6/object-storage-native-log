@@ -104,6 +104,26 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Broker buffering
 
+- **The broker runs one timed commit at a time** (step 13b). `New` starts the
+  worker with a positive flush interval; `DefaultFlushInterval` is 250ms, an initial
+  setting rather than a measured optimum. Empty ticks do no storage work. Appends
+  can accumulate in the next batch during a commit; memory remains unbounded.
+- **`Append` waits for its receipt's committed offset or caller cancellation.**
+  Success follows both the object upload and PostgreSQL commit. Commits use the
+  broker lifetime context, not a producer's context. Canceling a caller's wait does
+  not remove its accepted record; a timeout/error does not prove the record absent.
+  When completion races cancellation, either result may be observed.
+- **A commit error stops the broker; batches are not retried automatically.**
+  The in-flight and pending callers receive errors, later appends are rejected,
+  and `Wait` exposes the terminal failure. Retain the first terminal reason if
+  failure races shutdown. This favors explicit failure over uncertain duplicate writes.
+- **`Close` cancels work and waits for the worker, without a final flush.**
+  Pending callers receive `ErrClosed`; in-flight storage receives cancellation and
+  reports its own result, including success if it finished successfully. Repeated
+  or concurrent closure is safe. Parent cancellation similarly stops admission and
+  releases waiters. Storage must honor cancellation; the broker does not close its
+  caller-owned storage dependencies. Explicit closure makes `Wait` return nil;
+  commit failures and parent cancellation surface as errors.
 - **Every buffered record has a capacity-one completion receipt** (step 13a).
   `add` returns a receive-only channel; records and matching receipt slices enter
   and leave the buffer together under its mutex. A drained batch exposes record
@@ -112,7 +132,7 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   receipt its partition's starting offset plus record index; failure delivers the
   original error to all receipts. Channels carry one result and are not closed.
   Completion does not wait for receivers; abandoning a receipt neither removes a
-  record nor cancels a batch. Timed flushing and producer-facing waiting remain step 13b.
+  record nor cancels a batch. The flush worker completes each detached batch.
 - **The private buffer copies records on entry** (step 12). Its zero value is
   usable; `add` rejects nil records and clones valid protobuf records before taking
   the mutex. Empty payloads are valid. Callers may reuse records after `add` returns,
@@ -168,5 +188,3 @@ the case.
 
 - **Code stays partition-general** even though M1 only exercises one partition. Costs nearly
   nothing, stops M2 from being a rewrite.
-- **`Append` does not return until its flush has committed to Postgres** (step 13). Early-acking
-  would make the system look fast and be wrong, and would hide the latency M3 exists to measure.
