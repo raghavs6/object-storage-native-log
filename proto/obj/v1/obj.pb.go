@@ -25,7 +25,8 @@ type ProduceRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Topic     string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
 	Partition int32                  `protobuf:"varint,2,opt,name=partition,proto3" json:"partition,omitempty"`
-	// Records are appended to one partition; an empty list appends nothing.
+	// Records are appended to one partition. The list must not be empty: with no
+	// records there is no base_offset to return.
 	Records       []*Record `protobuf:"bytes,3,rep,name=records,proto3" json:"records,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

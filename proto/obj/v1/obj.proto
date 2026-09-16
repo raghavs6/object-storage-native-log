@@ -20,7 +20,8 @@ service Log {
 message ProduceRequest {
   string topic = 1;
   int32 partition = 2;
-  // Records are appended to one partition; an empty list appends nothing.
+  // Records are appended to one partition. The list must not be empty: with no
+  // records there is no base_offset to return.
   repeated Record records = 3;
 }
 

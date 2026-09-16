@@ -158,6 +158,29 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Network API
 
+- **The gRPC server lives in `internal/broker/server.go`** (step 15b), beside the
+  broker rather than in its own package. Keeping it here lets its test reuse the
+  package's existing fakes instead of forcing `Broker` behind an interface just to
+  be mocked from outside. `Server` embeds `objv1.UnimplementedLogServer`, takes a
+  one-method `fetcher` interface mirroring `committer`, and owns neither
+  dependency: the caller builds the broker and closes it.
+- **Errors map to three codes, and the caller's context is checked first.**
+  Validation failures are `InvalidArgument`; a stopped broker is `Unavailable`
+  because restarting one is the fix; storage and metadata failures are `Internal`.
+  The context check comes first because a stopped broker also reports
+  `context.Canceled`, and reporting that as the caller's own cancellation would
+  blame the wrong party. Without any mapping gRPC reports `Unknown`, which tells a
+  client nothing; the tests assert the specific codes.
+- **A produce with no records is `InvalidArgument`, not a no-op.** With no records
+  there is no `base_offset` to return, and a zero would read as "your records start
+  at 0". Step 14's `obj.proto` comment said an empty list appends nothing; it was
+  corrected in this step. Nil records are not separately validated: proto3 cannot
+  decode one over the wire, so the buffer's rejection surfacing as `Internal` is
+  right — it would be a bug in an in-process caller, not client input.
+- **Tested over a real gRPC connection on a local port**, not an in-memory pipe, so
+  registration, serialization, and status codes are all exercised. The server is
+  tested against fakes; real MinIO and Postgres behind it are covered by
+  `TestBrokerAppendFetchIntegration`, and the two meet end to end in step 16.
 - **The service lives in `obj.proto`, separate from `record.proto`** (step 14).
   Wire field numbers describe requests in flight and can change freely; field `1`
   in `record.proto` is written into every stored object and must never be
