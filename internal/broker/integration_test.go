@@ -100,7 +100,7 @@ func TestBrokerAppendFetchIntegration(t *testing.T) {
 	defer b.Close() // Stop the worker before test cleanup deletes objects and rows.
 	payloads := [][]byte{[]byte("first"), {}, {0, 0xff, '\n'}}
 	for i, payload := range payloads {
-		offset, err := b.Append(ctx, key, &objv1.Record{Payload: payload})
+		offset, err := b.Append(ctx, key, []*objv1.Record{{Payload: payload}})
 		if err != nil || offset != int64(i) {
 			t.Fatalf("append %d: offset %d, error %v", i, offset, err)
 		}

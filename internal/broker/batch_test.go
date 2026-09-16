@@ -56,7 +56,7 @@ func TestBatchCompletion(t *testing.T) {
 			beta := storage.PartitionKey{Topic: "beta", Partition: 0}
 			var receipts []<-chan appendResult
 			for _, key := range []storage.PartitionKey{alpha, beta, alpha, other} {
-				receipt, err := b.add(key, &objv1.Record{})
+				receipt, err := addOne(&b, key, &objv1.Record{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -67,7 +67,7 @@ func TestBatchCompletion(t *testing.T) {
 			for _, receipt := range receipts {
 				assertPending(t, receipt)
 			}
-			nextReceipt, err := b.add(alpha, &objv1.Record{})
+			nextReceipt, err := addOne(&b, alpha, &objv1.Record{})
 			if err != nil {
 				t.Fatal(err)
 			}

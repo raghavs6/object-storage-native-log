@@ -3,6 +3,8 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -53,7 +55,7 @@ func startTestBroker(t *testing.T, ctx context.Context) (*Broker, chan time.Time
 func appendAsync(b *Broker, ctx context.Context, key storage.PartitionKey, payload string) <-chan appendResult {
 	result := make(chan appendResult, 1)
 	go func() {
-		offset, err := b.Append(ctx, key, &objv1.Record{Payload: []byte(payload)})
+		offset, err := b.Append(ctx, key, []*objv1.Record{{Payload: []byte(payload)}})
 		result <- appendResult{offset: offset, err: err}
 	}()
 	return result
@@ -171,7 +173,7 @@ func TestBrokerCommitFailure(t *testing.T) {
 		if err := b.Wait(); !errors.Is(err, want) {
 			t.Fatalf("Wait: %v", err)
 		}
-		if _, err := b.Append(t.Context(), key, &objv1.Record{}); !errors.Is(err, want) {
+		if _, err := b.Append(t.Context(), key, []*objv1.Record{{}}); !errors.Is(err, want) {
 			t.Fatalf("new append after failure: %v", err)
 		}
 		if err := b.Close(); !errors.Is(err, want) {
@@ -218,7 +220,7 @@ func TestBrokerShutdown(t *testing.T) {
 				if call.ctx.Err() == nil {
 					t.Fatal("storage context not canceled")
 				}
-				if _, err := b.Append(t.Context(), key, &objv1.Record{}); !errors.Is(err, want) {
+				if _, err := b.Append(t.Context(), key, []*objv1.Record{{}}); !errors.Is(err, want) {
 					t.Fatalf("new append: %v", err)
 				}
 				_ = b.Close() // Repeated shutdown is safe.
@@ -226,6 +228,56 @@ func TestBrokerShutdown(t *testing.T) {
 			})
 		})
 	}
+}
+
+// Two producers appending to one partition concurrently must not interleave:
+// each request's records stay adjacent and in order, so its offsets run
+// contiguously from the base offset Append returns. Admitting one record at a
+// time would allow a0 b0 a1 b1, which both splits a request's offsets and can
+// reorder its own records.
+func TestBrokerBatchStaysContiguous(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, ticks, store := startTestBroker(t, t.Context())
+		key := storage.PartitionKey{Topic: "topic"}
+		appendBatch := func(prefix string) <-chan appendResult {
+			result := make(chan appendResult, 1)
+			go func() {
+				records := make([]*objv1.Record, 3)
+				for i := range records {
+					records[i] = &objv1.Record{Payload: fmt.Appendf(nil, "%s%d", prefix, i)}
+				}
+				offset, err := b.Append(t.Context(), key, records)
+				result <- appendResult{offset: offset, err: err}
+			}()
+			return result
+		}
+		first := appendBatch("a")
+		second := appendBatch("b")
+		synctest.Wait()
+		ticks <- time.Now()
+		call := receiveCommit(t, store)
+		payloads := make([]string, 0, 6)
+		for _, record := range call.groups[key] {
+			payloads = append(payloads, string(record.Payload))
+		}
+		order := strings.Join(payloads, " ")
+		if order != "a0 a1 a2 b0 b1 b2" && order != "b0 b1 b2 a0 a1 a2" {
+			t.Fatalf("requests interleaved in one batch: %s", order)
+		}
+		call.result <- commitResult{segments: []storage.Segment{{Topic: "topic", StartOffset: 0, EndOffset: 6}}}
+		bases := map[int64]bool{}
+		for _, receipt := range []<-chan appendResult{first, second} {
+			got := readReceipt(t, receipt)
+			if got.err != nil {
+				t.Fatalf("batch append: %+v", got)
+			}
+			bases[got.offset] = true
+		}
+		// One request owns [0,3), the other [3,6); neither starts at 1 or 2.
+		if !bases[0] || !bases[3] {
+			t.Fatalf("base offsets %v, want 0 and 3", bases)
+		}
+	})
 }
 
 func TestBrokerValidationAndTicker(t *testing.T) {
@@ -242,12 +294,15 @@ func TestBrokerValidationAndTicker(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = b.Close() })
 		key := storage.PartitionKey{Topic: "topic"}
-		if _, err := b.Append(t.Context(), key, nil); err == nil {
+		if _, err := b.Append(t.Context(), key, []*objv1.Record{nil}); err == nil {
 			t.Fatal("nil record accepted")
+		}
+		if _, err := b.Append(t.Context(), key, nil); err == nil {
+			t.Fatal("empty request accepted")
 		}
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		if _, err := b.Append(ctx, key, &objv1.Record{}); !errors.Is(err, context.Canceled) {
+		if _, err := b.Append(ctx, key, []*objv1.Record{{}}); !errors.Is(err, context.Canceled) {
 			t.Fatalf("pre-canceled append: %v", err)
 		}
 		result := appendAsync(b, t.Context(), key, "record")

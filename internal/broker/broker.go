@@ -53,11 +53,13 @@ func newBroker(ctx context.Context, store committer, ticks <-chan time.Time, sto
 	return b
 }
 
-// Append copies a record and waits for its committed offset. Cancellation stops
-// only this caller's wait; an accepted record may still commit. An error is not
-// proof that a record is absent. If completion races cancellation, either result
-// may be observed. The caller must not mutate record until Append returns.
-func (b *Broker) Append(ctx context.Context, key storage.PartitionKey, record *objv1.Record) (int64, error) {
+// Append copies records and waits for their commit, returning the first offset.
+// One call's records share a batch in the given order, so their offsets run
+// contiguously from the returned value. Cancellation stops only this caller's
+// wait; accepted records may still commit. An error is not proof that they are
+// absent. If completion races cancellation, either result may be observed. The
+// caller must not mutate records until Append returns.
+func (b *Broker) Append(ctx context.Context, key storage.PartitionKey, records []*objv1.Record) (int64, error) {
 	b.mu.Lock()
 	if err := ctx.Err(); err != nil {
 		b.mu.Unlock()
@@ -72,17 +74,28 @@ func (b *Broker) Append(ctx context.Context, key storage.PartitionKey, record *o
 		b.mu.Unlock()
 		return 0, err
 	}
-	receipt, err := b.buffer.add(key, record)
+	receipts, err := b.buffer.add(key, records)
 	b.mu.Unlock()
 	if err != nil {
 		return 0, err
 	}
-	select {
-	case result := <-receipt:
-		return result.offset, result.err
-	case <-ctx.Done():
-		return 0, ctx.Err()
+	// Wait for every receipt rather than only the first, so this does not depend
+	// on same-batch receipts always completing together.
+	var base int64
+	for i, receipt := range receipts {
+		select {
+		case result := <-receipt:
+			if result.err != nil {
+				return 0, result.err
+			}
+			if i == 0 {
+				base = result.offset
+			}
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
 	}
+	return base, nil
 }
 
 func (b *Broker) run(ticks <-chan time.Time) {

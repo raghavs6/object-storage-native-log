@@ -10,6 +10,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// addOne adds a single record, which most tests want; add itself takes a group.
+func addOne(b *buffer, key storage.PartitionKey, record *objv1.Record) (<-chan appendResult, error) {
+	receipts, err := b.add(key, []*objv1.Record{record})
+	if err != nil {
+		return nil, err
+	}
+	return receipts[0], nil
+}
+
 func TestBufferGroupingAndOrder(t *testing.T) {
 	var b buffer
 	alpha := storage.PartitionKey{Topic: "alpha", Partition: 0}
@@ -23,7 +32,7 @@ func TestBufferGroupingAndOrder(t *testing.T) {
 		{otherPartition, "other partition"}, {alpha, ""}, {alpha, "last"},
 	}
 	for _, input := range inputs {
-		if _, err := b.add(input.key, &objv1.Record{Payload: []byte(input.payload)}); err != nil {
+		if _, err := addOne(&b, input.key, &objv1.Record{Payload: []byte(input.payload)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -50,7 +59,7 @@ func TestBufferCopiesRecords(t *testing.T) {
 	var b buffer
 	key := storage.PartitionKey{Topic: "topic"}
 	record := &objv1.Record{Payload: []byte("original")}
-	if _, err := b.add(key, record); err != nil {
+	if _, err := addOne(&b, key, record); err != nil {
 		t.Fatal(err)
 	}
 	record.Payload[0] = 'X'
@@ -66,20 +75,20 @@ func TestBufferDrainOwnership(t *testing.T) {
 	if got := b.drain(); got != nil {
 		t.Fatalf("initial drain = %v, want nil", got)
 	}
-	if receipt, err := b.add(key, nil); err == nil || receipt != nil {
+	if receipt, err := addOne(&b, key, nil); err == nil || receipt != nil {
 		t.Fatalf("nil record: got receipt %v, error %v", receipt, err)
 	}
 	if got := b.drain(); got != nil {
 		t.Fatalf("rejected record created a batch: %v", got)
 	}
-	if _, err := b.add(key, &objv1.Record{Payload: []byte("old")}); err != nil {
+	if _, err := addOne(&b, key, &objv1.Record{Payload: []byte("old")}); err != nil {
 		t.Fatal(err)
 	}
 	old := b.drain().groups
 	if got := b.drain(); got != nil {
 		t.Fatalf("repeated drain = %v, want nil", got)
 	}
-	if _, err := b.add(key, &objv1.Record{Payload: []byte("new")}); err != nil {
+	if _, err := addOne(&b, key, &objv1.Record{Payload: []byte("new")}); err != nil {
 		t.Fatal(err)
 	}
 	if len(old[key]) != 1 || string(old[key][0].Payload) != "old" {
@@ -107,7 +116,7 @@ func TestBufferConcurrentAddAndDrain(t *testing.T) {
 			for i := range perWriter {
 				id := fmt.Sprintf("%d/%d", writer, i)
 				key := storage.PartitionKey{Topic: "topic", Partition: writer % 2}
-				receipt, err := b.add(key, &objv1.Record{Payload: []byte(id)})
+				receipt, err := addOne(&b, key, &objv1.Record{Payload: []byte(id)})
 				if err != nil {
 					t.Errorf("add %s: %v", id, err)
 				}

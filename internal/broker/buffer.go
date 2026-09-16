@@ -47,16 +47,32 @@ func (b *batch) complete(segments []storage.Segment, err error) {
 	}
 }
 
-// add copies record into memory; success does not mean the record is durable.
-// The caller may modify record after add returns, but not while it is copying.
-// The returned receipt delivers one eventual commit result. Abandoning it does
-// not remove the record or cancel the batch.
-func (b *buffer) add(key storage.PartitionKey, record *objv1.Record) (<-chan appendResult, error) {
-	if record == nil {
-		return nil, fmt.Errorf("buffer %s/%d: nil record", key.Topic, key.Partition)
+// add copies records into memory as one group; success does not mean they are
+// durable. The caller may modify records after add returns, but not while it is
+// copying. One call's records occupy adjacent positions in a single batch, so a
+// commit gives them contiguous offsets in this order. Each returned receipt
+// delivers one eventual commit result. Abandoning them does not remove the
+// records or cancel the batch. An empty slice and any nil record are rejected,
+// and a rejected call buffers nothing.
+func (b *buffer) add(key storage.PartitionKey, records []*objv1.Record) ([]<-chan appendResult, error) {
+	if len(records) == 0 {
+		return nil, fmt.Errorf("buffer %s/%d: no records", key.Topic, key.Partition)
 	}
-	copy := proto.Clone(record).(*objv1.Record)
-	receipt := make(chan appendResult, 1)
+	// Copy and validate everything first: a rejected record must not leave part
+	// of its request buffered.
+	copies := make([]*objv1.Record, len(records))
+	receipts := make([]chan appendResult, len(records))
+	handles := make([]<-chan appendResult, len(records))
+	for i, record := range records {
+		if record == nil {
+			return nil, fmt.Errorf("buffer %s/%d: nil record at index %d", key.Topic, key.Partition, i)
+		}
+		copies[i] = proto.Clone(record).(*objv1.Record)
+		receipts[i] = make(chan appendResult, 1)
+		handles[i] = receipts[i]
+	}
+	// One lock acquisition for the whole group, so no other caller can interleave
+	// its records with these and break their order or contiguity.
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.pending == nil {
@@ -65,9 +81,9 @@ func (b *buffer) add(key storage.PartitionKey, record *objv1.Record) (<-chan app
 			receipts: make(map[storage.PartitionKey][]chan appendResult),
 		}
 	}
-	b.pending.groups[key] = append(b.pending.groups[key], copy)
-	b.pending.receipts[key] = append(b.pending.receipts[key], receipt)
-	return receipt, nil
+	b.pending.groups[key] = append(b.pending.groups[key], copies...)
+	b.pending.receipts[key] = append(b.pending.receipts[key], receipts...)
+	return handles, nil
 }
 
 // drain transfers ownership of the current batch to the caller. New additions

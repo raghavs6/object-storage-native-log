@@ -104,11 +104,20 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Broker buffering
 
+- **One `Append` call's records are admitted as a unit** (step 15a). `add` takes a
+  slice and holds the buffer mutex once for the whole group, so the records sit
+  adjacent in one batch and `complete` gives them contiguous offsets in request
+  order. `Append` returns the first. Per-record admission allowed two producers to
+  interleave — verified, a temporary test produced `b2 a1 a0 b1 a2 b0`, which both
+  splits a request's offsets and reorders its own records. The wire contract's
+  `base_offset` and per-partition producer order both depend on this.
+  `Append` waits on every receipt rather than only the first, so it does not rely
+  on same-batch receipts completing together.
 - **The broker runs one timed commit at a time** (step 13b). `New` starts the
   worker with a positive flush interval; `DefaultFlushInterval` is 250ms, an initial
   setting rather than a measured optimum. Empty ticks do no storage work. Appends
   can accumulate in the next batch during a commit; memory remains unbounded.
-- **`Append` waits for its receipt's committed offset or caller cancellation.**
+- **`Append` waits for its receipts' committed offsets or caller cancellation.**
   Success follows both the object upload and PostgreSQL commit. Commits use the
   broker lifetime context, not a producer's context. Canceling a caller's wait does
   not remove its accepted record; a timeout/error does not prove the record absent.
@@ -134,8 +143,10 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   Completion does not wait for receivers; abandoning a receipt neither removes a
   record nor cancels a batch. The flush worker completes each detached batch.
 - **The private buffer copies records on entry** (step 12). Its zero value is
-  usable; `add` rejects nil records and clones valid protobuf records before taking
-  the mutex. Empty payloads are valid. Callers may reuse records after `add` returns,
+  usable; `add` rejects empty slices and any nil record, and clones valid protobuf
+  records before taking the mutex. A rejected call buffers nothing, so a bad record
+  cannot leave part of its request behind. Empty payloads are valid, and an empty
+  payload differs from an absent record. Callers may reuse records after `add` returns,
   but must not mutate them during copying. Success means buffered, not durable.
 - **`drain` transfers ownership of the accumulated batch and resets the buffer.**
   Additions and drains share one mutex; an addition belongs to exactly one batch.
@@ -158,8 +169,8 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   flush, so one record per call would make M3 measure round-trips rather than the
   storage path — a scheduled consumer, not a hypothetical one. `ProduceResponse`
   carries only `base_offset` because a request's offsets are contiguous. An empty
-  record list appends nothing. How the server fans one request's records into a
-  single flush is step 15's decision, not this step's.
+  record list appends nothing. Step 15a made the broker admit one request's records
+  as a unit, which is what makes the contiguity promise true.
 - **`Fetch` is unary and returns every record in one response.** `Store.Fetch`
   already loads all matching records into memory, so a stream would put a second
   concurrency model in front of a non-streaming implementation. Records are
