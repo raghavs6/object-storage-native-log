@@ -23,11 +23,11 @@ func TestBufferGroupingAndOrder(t *testing.T) {
 		{otherPartition, "other partition"}, {alpha, ""}, {alpha, "last"},
 	}
 	for _, input := range inputs {
-		if err := b.add(input.key, &objv1.Record{Payload: []byte(input.payload)}); err != nil {
+		if _, err := b.add(input.key, &objv1.Record{Payload: []byte(input.payload)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got := b.drain()
+	got := b.drain().groups
 	want := map[storage.PartitionKey][]string{
 		alpha: {"first", "", "last"}, otherPartition: {"other partition"}, beta: {"other topic"},
 	}
@@ -50,12 +50,12 @@ func TestBufferCopiesRecords(t *testing.T) {
 	var b buffer
 	key := storage.PartitionKey{Topic: "topic"}
 	record := &objv1.Record{Payload: []byte("original")}
-	if err := b.add(key, record); err != nil {
+	if _, err := b.add(key, record); err != nil {
 		t.Fatal(err)
 	}
 	record.Payload[0] = 'X'
 	record.Payload = []byte("replacement")
-	if got := b.drain()[key][0]; !proto.Equal(got, &objv1.Record{Payload: []byte("original")}) {
+	if got := b.drain().groups[key][0]; !proto.Equal(got, &objv1.Record{Payload: []byte("original")}) {
 		t.Fatalf("buffered record changed with caller: %v", got)
 	}
 }
@@ -66,20 +66,20 @@ func TestBufferDrainOwnership(t *testing.T) {
 	if got := b.drain(); got != nil {
 		t.Fatalf("initial drain = %v, want nil", got)
 	}
-	if err := b.add(key, nil); err == nil {
-		t.Fatal("nil record accepted")
+	if receipt, err := b.add(key, nil); err == nil || receipt != nil {
+		t.Fatalf("nil record: got receipt %v, error %v", receipt, err)
 	}
 	if got := b.drain(); got != nil {
 		t.Fatalf("rejected record created a batch: %v", got)
 	}
-	if err := b.add(key, &objv1.Record{Payload: []byte("old")}); err != nil {
+	if _, err := b.add(key, &objv1.Record{Payload: []byte("old")}); err != nil {
 		t.Fatal(err)
 	}
-	old := b.drain()
+	old := b.drain().groups
 	if got := b.drain(); got != nil {
 		t.Fatalf("repeated drain = %v, want nil", got)
 	}
-	if err := b.add(key, &objv1.Record{Payload: []byte("new")}); err != nil {
+	if _, err := b.add(key, &objv1.Record{Payload: []byte("new")}); err != nil {
 		t.Fatal(err)
 	}
 	if len(old[key]) != 1 || string(old[key][0].Payload) != "old" {
@@ -87,7 +87,7 @@ func TestBufferDrainOwnership(t *testing.T) {
 	}
 	old[key][0].Payload[0] = 'X'
 	delete(old, key)
-	got := b.drain()
+	got := b.drain().groups
 	if len(got[key]) != 1 || string(got[key][0].Payload) != "new" {
 		t.Fatalf("old batch mutation changed new batch: %v", got)
 	}
@@ -96,6 +96,7 @@ func TestBufferDrainOwnership(t *testing.T) {
 func TestBufferConcurrentAddAndDrain(t *testing.T) {
 	var b buffer
 	const writers, perWriter = 8, 100
+	var receipts [writers][perWriter]<-chan appendResult
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for writer := range writers {
@@ -106,14 +107,16 @@ func TestBufferConcurrentAddAndDrain(t *testing.T) {
 			for i := range perWriter {
 				id := fmt.Sprintf("%d/%d", writer, i)
 				key := storage.PartitionKey{Topic: "topic", Partition: writer % 2}
-				if err := b.add(key, &objv1.Record{Payload: []byte(id)}); err != nil {
+				receipt, err := b.add(key, &objv1.Record{Payload: []byte(id)})
+				if err != nil {
 					t.Errorf("add %s: %v", id, err)
 				}
+				receipts[writer][i] = receipt
 			}
 		}()
 	}
 	// One collector owns the results; it drains concurrently with the writers.
-	batches := make(chan map[storage.PartitionKey][]*objv1.Record, perWriter)
+	batches := make(chan *batch, perWriter)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -126,18 +129,29 @@ func TestBufferConcurrentAddAndDrain(t *testing.T) {
 	wg.Wait()
 	close(batches)
 	seen := make(map[string]int)
-	collect := func(batch map[storage.PartitionKey][]*objv1.Record) {
-		for key, records := range batch {
-			for _, record := range records {
+	expected := make(map[string]int64)
+	next := make(map[storage.PartitionKey]int64)
+	collect := func(batch *batch) {
+		if batch == nil {
+			return
+		}
+		var segments []storage.Segment
+		for key, records := range batch.groups {
+			segments = append(segments, storage.Segment{Topic: key.Topic, Partition: key.Partition,
+				StartOffset: next[key], EndOffset: next[key] + int64(len(records))})
+			for i, record := range records {
 				id := string(record.Payload)
 				seen[id]++
+				expected[id] = next[key] + int64(i)
 				var writer, sequence int
 				if _, err := fmt.Sscanf(id, "%d/%d", &writer, &sequence); err != nil ||
 					key.Topic != "topic" || key.Partition != writer%2 {
 					t.Errorf("record %q in wrong group %v", id, key)
 				}
 			}
+			next[key] += int64(len(records))
 		}
+		completeWithoutReceiver(t, batch, segments, nil)
 	}
 	for batch := range batches {
 		collect(batch)
@@ -152,6 +166,11 @@ func TestBufferConcurrentAddAndDrain(t *testing.T) {
 			if seen[id] != 1 {
 				t.Errorf("record %s appeared %d times, want 1", id, seen[id])
 			}
+			result := readReceipt(t, receipts[writer][i])
+			if result.err != nil || result.offset != expected[id] {
+				t.Errorf("record %s: result %+v, want offset %d", id, result, expected[id])
+			}
+			assertPending(t, receipts[writer][i])
 		}
 	}
 }

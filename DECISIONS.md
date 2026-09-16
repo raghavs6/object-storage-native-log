@@ -104,11 +104,20 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Broker buffering
 
+- **Every buffered record has a capacity-one completion receipt** (step 13a).
+  `add` returns a receive-only channel; records and matching receipt slices enter
+  and leave the buffer together under its mutex. A drained batch exposes record
+  groups directly to `Store.Commit`. The owner calls `complete` exactly once with
+  that commit's segments or error, outside the buffer lock. Success assigns each
+  receipt its partition's starting offset plus record index; failure delivers the
+  original error to all receipts. Channels carry one result and are not closed.
+  Completion does not wait for receivers; abandoning a receipt neither removes a
+  record nor cancels a batch. Timed flushing and producer-facing waiting remain step 13b.
 - **The private buffer copies records on entry** (step 12). Its zero value is
   usable; `add` rejects nil records and clones valid protobuf records before taking
   the mutex. Empty payloads are valid. Callers may reuse records after `add` returns,
   but must not mutate them during copying. Success means buffered, not durable.
-- **`drain` transfers ownership of the accumulated map and resets the buffer.**
+- **`drain` transfers ownership of the accumulated batch and resets the buffer.**
   Additions and drains share one mutex; an addition belongs to exactly one batch.
   Records within each partition follow insertion order under the lock, with no
   predetermined order for concurrent callers or across partitions. Later additions
