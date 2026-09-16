@@ -102,6 +102,20 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   rows — assign 0-2, crash before the rows land, and `next_offset` says 3 while nothing claims 0, 1
   or 2. Both `*pgxpool.Pool` and `pgx.Tx` satisfy `querier` unchanged.
 
+## Broker buffering
+
+- **The private buffer copies records on entry** (step 12). Its zero value is
+  usable; `add` rejects nil records and clones valid protobuf records before taking
+  the mutex. Empty payloads are valid. Callers may reuse records after `add` returns,
+  but must not mutate them during copying. Success means buffered, not durable.
+- **`drain` transfers ownership of the accumulated map and resets the buffer.**
+  Additions and drains share one mutex; an addition belongs to exactly one batch.
+  Records within each partition follow insertion order under the lock, with no
+  predetermined order for concurrent callers or across partitions. Later additions
+  cannot mutate a drained batch. Empty drains return nil. Storage I/O, timed flushing,
+  producer acknowledgments, retries, and size limits are outside this step; memory
+  remains unbounded until later batching controls are added.
+
 ## Process and infrastructure
 
 - **Step 8 is split into definition/generation (8a) and framing (8b).** Protobuf
