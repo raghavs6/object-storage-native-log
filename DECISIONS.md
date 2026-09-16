@@ -145,6 +145,28 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   producer acknowledgments, retries, and size limits are outside this step; memory
   remains unbounded until later batching controls are added.
 
+## Network API
+
+- **The service lives in `obj.proto`, separate from `record.proto`** (step 14).
+  Wire field numbers describe requests in flight and can change freely; field `1`
+  in `record.proto` is written into every stored object and must never be
+  renumbered, so that file stays small and rarely opened. One `protoc` run names
+  both plugins and produces `obj.pb.go` and `obj_grpc.pb.go`, leaving
+  `record.pb.go` untouched. Both share one Go package, so importing `record.proto`
+  only lets the service reference `Record`. Generation is byte-repeatable.
+- **`Produce` takes repeated records, not one.** Each `Append` blocks for its
+  flush, so one record per call would make M3 measure round-trips rather than the
+  storage path — a scheduled consumer, not a hypothetical one. `ProduceResponse`
+  carries only `base_offset` because a request's offsets are contiguous. An empty
+  record list appends nothing. How the server fans one request's records into a
+  single flush is step 15's decision, not this step's.
+- **`Fetch` is unary and returns every record in one response.** `Store.Fetch`
+  already loads all matching records into memory, so a stream would put a second
+  concurrency model in front of a non-streaming implementation. Records are
+  contiguous from the requested offset, so no per-record offsets are sent.
+  Revisit in M4 with measured read amplification.
+- **Partitions are `int32` on the wire** and `int` in storage; step 15 converts.
+
 ## Process and infrastructure
 
 - **Step 8 is split into definition/generation (8a) and framing (8b).** Protobuf
@@ -152,6 +174,12 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   with only `bytes payload = 1`; empty and absent payloads mean the same thing.
   Topic, partition, and offsets stay in metadata. Use the generated Go type
   directly, without a handwritten wrapper.
+- **Pin `protoc-gen-go-grpc` v1.6.2 beside `protoc-gen-go`** (step 14). Messages and
+  services come from different generators: `protoc-gen-go` ignores a `service` block
+  entirely. The new plugin joins the ignored `bin/` directory and the README recipe.
+  `google.golang.org/grpc` v1.83.2 becomes a runtime dependency because the generated
+  service code imports it; satisfying it also bumped `golang.org/x/text` and
+  `golang.org/x/sync` and added `golang.org/x/sys` as indirect requirements.
 - **Commit generated protobuf Go code; pin the generation tools.** `protoc` 36.1
   and `protoc-gen-go` v1.36.12 live under ignored `bin/`, with installation and
   generation commands beside the definition. The Go protobuf dependency is also

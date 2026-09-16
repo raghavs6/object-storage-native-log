@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package obj.v1;
+
+import "proto/obj/v1/record.proto";
+
+option go_package = "github.com/raghavs6/object-storage-native-log/proto/obj/v1";
+
+// Log is the network API. These field numbers describe requests in flight only;
+// unlike record.proto, no stored object depends on them.
+service Log {
+  // Produce appends records to one partition. It returns after the records are
+  // durable, so callers observe the flush interval as latency.
+  rpc Produce(ProduceRequest) returns (ProduceResponse);
+
+  // Fetch returns records from offset onward, in order, in one response.
+  rpc Fetch(FetchRequest) returns (FetchResponse);
+}
+
+message ProduceRequest {
+  string topic = 1;
+  int32 partition = 2;
+  // Records are appended to one partition; an empty list appends nothing.
+  repeated Record records = 3;
+}
+
+message ProduceResponse {
+  // Offset of the first record. A request's offsets are contiguous from here.
+  int64 base_offset = 1;
+}
+
+message FetchRequest {
+  string topic = 1;
+  int32 partition = 2;
+  // First offset to return. Offsets at or beyond the end return no records.
+  int64 offset = 3;
+}
+
+message FetchResponse {
+  // Records are contiguous from the requested offset, so callers can count.
+  repeated Record records = 1;
+}
