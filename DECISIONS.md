@@ -203,6 +203,31 @@ argue against it, don't quietly work around it. Append a line when a new one is 
 
 ## Process and infrastructure
 
+- **`cmd/broker` calls `GracefulStop` before `Broker.Close`** (step 16a). A `Produce` is parked
+  inside `Append` waiting for the next flush tick, so at Ctrl-C there are almost always RPCs that
+  are about to succeed. `GracefulStop` stops accepting and waits for those, and the ticker is still
+  running, so they commit and return real offsets; only then does `Close` stop a broker with
+  nothing pending. Closing first tells them `Unavailable` for records milliseconds from durable,
+  because `Close` does not flush. Verified by A/B against a live broker, signalling the instant a
+  client connection was established: reversed order returned `Unavailable` in 2 of 3 runs, correct
+  order returned offsets in 3 of 3. An earlier attempt using fixed sleeps passed under *both*
+  orderings and proved nothing — the requests had all completed before the signal.
+- **The broker's parent context is `context.Background()`, not the signal context.** This is what
+  makes the ordering above mean anything: deriving it from the signal would cancel commits
+  mid-PUT the moment Ctrl-C arrives, and the graceful wait would buy nothing. `Close` is the only
+  thing that stops the broker. `GracefulStop` is bounded at ten seconds, falling back to `Stop`,
+  so a hung storage call cannot make the process unkillable.
+- **`cmd/` reads the environment; libraries still do not.** `cmd/broker` reuses the variable names
+  the integration test already uses — `OBJ_POSTGRES_DSN`, `OBJ_S3_ENDPOINT`/`REGION`/`BUCKET`/
+  `ACCESS_KEY`/`SECRET_KEY` — so one set of values points both the tests and the binary at the same
+  services, plus `OBJ_LISTEN` (default `127.0.0.1:9092`). The six-line `env` helper is duplicated
+  between the test and the binary rather than exported; sharing it would mean a new exported
+  surface to save six lines. No flush-interval variable: M3 adds one when it has a measurement to
+  attach to it.
+- **The wire is verified with `grpcurl -import-path . -proto proto/obj/v1/obj.proto`**, not server
+  reflection. The `.proto` is in the repo and the flags cost two arguments; reflection would expose
+  the service list on every connection to save typing. Revisit if `objctl` makes the flags annoying.
+
 - **Step 8 is split into definition/generation (8a) and framing (8b).** Protobuf
   tooling was not already present through gRPC. Step 8a defines `obj.v1.Record`
   with only `bytes payload = 1`; empty and absent payloads mean the same thing.
