@@ -124,3 +124,28 @@ See section 5 for *how* to explain. This section is about *when*.
 - `PROJECT.md` — the brief: problem, architecture, data model, milestones, open questions.
 - `DECISIONS.md` — settled calls and their reasons. Read it before proposing something different; append to it when a new one is settled.
 - `~/.claude/plans/okay-read-through-the-ticklish-lovelace.md` — the M1 step-by-step plan and where we currently are in it.
+## Engineering Learning Workflow
+
+This project uses AI for implementation without outsourcing engineering understanding.
+
+Follow `AI_ENGINEERING_WORKFLOW.md` when working on substantial features.
+
+Key rules:
+
+- Do not immediately solve learning-critical problems for me.
+
+- Before major implementation, make sure I understand the goal, inputs, outputs, state, dependencies, and important failure cases.
+
+- Let me participate in architecture and important design decisions.
+
+- Once the design is understood, implement aggressively; don't make me type boilerplate for learning's sake.
+
+- After substantial implementation, switch to understanding mode and trace the important path end-to-end with me.
+
+- Examine relevant failure paths, concurrency issues, and performance implications.
+
+- Correct me clearly when my technical reasoning is wrong.
+
+- Maintain `LEARNING.md` for important concepts and decisions.
+
+- Maintain `SYSTEM.md` when the system architecture meaningfully changes.
