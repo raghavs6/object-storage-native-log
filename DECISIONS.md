@@ -228,6 +228,32 @@ argue against it, don't quietly work around it. Append a line when a new one is 
   reflection. The `.proto` is in the repo and the flags cost two arguments; reflection would expose
   the service list on every connection to save typing. Revisit if `objctl` makes the flags annoying.
 
+- **`objctl` takes payloads as a repeatable `--data` flag of UTF-8 text** (step 16b). One flag, one
+  record, in command-line order — `flag.Value.Set` is documented as called once per occurrence in
+  that order, so the records reach the broker in the order typed. Arbitrary binary is therefore not
+  expressible, and nothing in M1-M5 needs it; `--data-base64` is a new flag if M6 does. Rejected:
+  stdin-per-line, which makes the newline a delimiter and so forbids a newline *inside* a record;
+  and base64, which reintroduces exactly the grpcurl friction this step removes. A produce with no
+  `--data` fails locally without dialling, because the server's `InvalidArgument` is already covered
+  by `server_test.go` and a round trip would only make the shell wait to be told what the flags say.
+- **`objctl consume` prints offset-prefixed lines**, `0: a`. `Fetch` sends no per-record offsets
+  because records are contiguous from the requested offset, so the client numbers them itself. M5's
+  check is "no gaps among the acked records", and a gap is invisible in a bare payload list but
+  obvious as a missing number. Costs raw pipe-ability, which nothing here uses; `--raw` if that
+  changes. An empty result writes one line to stderr — printing nothing at all is indistinguishable
+  from a crash — leaving stdout pure data. No `--follow`: `Fetch` is unary, so it would be a poll
+  loop guessing an interval, and streaming is already deferred to M4 behind measured read
+  amplification.
+- **`objctl` takes `--addr` and does not read `OBJ_LISTEN`.** `cmd/` reads the environment, but that
+  variable means *where to listen* and may sensibly be `0.0.0.0:9092`, which is a poor thing to dial.
+  Same string, different meaning. The three shared flags are registered separately in each
+  subcommand rather than through a helper, on the same grounds as the duplicated `env` helper above.
+- **`grpc.NewClient`, not the deprecated `grpc.Dial` — and it performs no I/O.** A wrong `--addr`
+  does not fail at construction; it surfaces at the first RPC as `Unavailable ... Error while
+  dialing`. Deliberately unlike `NewPostgresStore`, which pings so a bad DSN fails early: a server
+  validates its dependencies at startup, while a one-shot CLI's very next act is the RPC itself.
+  Verified both ways against a dead port.
+
 - **Step 8 is split into definition/generation (8a) and framing (8b).** Protobuf
   tooling was not already present through gRPC. Step 8a defines `obj.v1.Record`
   with only `bytes payload = 1`; empty and absent payloads mean the same thing.
