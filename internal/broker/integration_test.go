@@ -93,7 +93,7 @@ func TestBrokerAppendFetchIntegration(t *testing.T) {
 	})
 	store := storage.NewStore(integrationObjects{objects, t, cleanupClient, cfg.Bucket}, pg)
 	// Shorten the interval for the test; no latency claim is derived from it.
-	b, err := New(ctx, store, 5*time.Millisecond)
+	b, err := New(ctx, store, Config{FlushInterval: 5 * time.Millisecond, FlushBytes: 1 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}

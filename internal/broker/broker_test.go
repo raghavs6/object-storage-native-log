@@ -43,11 +43,18 @@ func (s *controlledStore) Commit(ctx context.Context, groups map[storage.Partiti
 	}
 }
 
+// startTestBroker drives flushes by hand: the size threshold is far out of reach
+// of these payloads, so an injected tick is the only thing that can trigger one.
 func startTestBroker(t *testing.T, ctx context.Context) (*Broker, chan time.Time, *controlledStore) {
+	t.Helper()
+	return startSizedTestBroker(t, ctx, 1<<30)
+}
+
+func startSizedTestBroker(t *testing.T, ctx context.Context, flushBytes int) (*Broker, chan time.Time, *controlledStore) {
 	t.Helper()
 	ticks := make(chan time.Time, 1)
 	store := &controlledStore{calls: make(chan commitCall, 1)}
-	b := newBroker(ctx, store, ticks, func() {})
+	b := newBroker(ctx, store, Config{FlushInterval: time.Second, FlushBytes: flushBytes}, ticks, func() {})
 	t.Cleanup(func() { _ = b.Close() })
 	return b, ticks, store
 }
@@ -281,14 +288,19 @@ func TestBrokerBatchStaysContiguous(t *testing.T) {
 }
 
 func TestBrokerValidationAndTicker(t *testing.T) {
-	for _, interval := range []time.Duration{0, -time.Second} {
-		if b, err := New(t.Context(), nil, interval); b != nil || err == nil {
-			t.Fatalf("interval %v: got %v, %v", interval, b, err)
+	for _, cfg := range []Config{
+		{FlushInterval: 0, FlushBytes: 1 << 20},
+		{FlushInterval: -time.Second, FlushBytes: 1 << 20},
+		{FlushInterval: time.Second, FlushBytes: 0},
+		{FlushInterval: time.Second, FlushBytes: -1},
+	} {
+		if b, err := New(t.Context(), nil, cfg); b != nil || err == nil {
+			t.Fatalf("config %+v: got %v, %v", cfg, b, err)
 		}
 	}
 	synctest.Test(t, func(t *testing.T) {
 		store := &controlledStore{calls: make(chan commitCall, 1)}
-		b, err := New(t.Context(), store, DefaultFlushInterval)
+		b, err := New(t.Context(), store, DefaultConfig())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -310,7 +322,7 @@ func TestBrokerValidationAndTicker(t *testing.T) {
 		assertPending(t, result)
 		assertNoCommit(t, store)
 		// Only synctest's virtual clock advances; this is not a wall-clock sleep.
-		time.Sleep(DefaultFlushInterval)
+		time.Sleep(DefaultConfig().FlushInterval)
 		call := receiveCommit(t, store)
 		if len(call.groups[key]) != 1 {
 			t.Fatalf("invalid requests entered batch: %v", call.groups)
@@ -319,5 +331,56 @@ func TestBrokerValidationAndTicker(t *testing.T) {
 		if got := readReceipt(t, result); got.err != nil || got.offset != 0 {
 			t.Fatalf("timed append: %+v", got)
 		}
+	})
+}
+
+// TestBrokerFlushesOnSize drives a broker whose ticks channel is discarded, so
+// nothing can ever send on it. Any commit observed here was caused by size.
+func TestBrokerFlushesOnSize(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// A ten-byte payload frames to sixteen bytes: four for the length prefix
+		// and twelve for the protobuf body. Two of them reach the threshold exactly.
+		const payload = "0123456789"
+		const flushBytes = 32
+		b, _, store := startSizedTestBroker(t, t.Context(), flushBytes)
+		key := storage.PartitionKey{Topic: "topic"}
+
+		first := appendAsync(b, t.Context(), key, payload)
+		synctest.Wait()
+		assertPending(t, first)
+		assertNoCommit(t, store) // One record is under the threshold.
+
+		second := appendAsync(b, t.Context(), key, payload)
+		call := receiveCommit(t, store)
+		if len(call.groups) != 1 || len(call.groups[key]) != 2 {
+			t.Fatalf("size-triggered batch: %v", call.groups)
+		}
+		call.result <- commitResult{segments: []storage.Segment{
+			{Topic: key.Topic, StartOffset: 0, EndOffset: 2},
+		}}
+		for i, result := range []<-chan appendResult{first, second} {
+			if got := readReceipt(t, result); got.err != nil || got.offset != int64(i) {
+				t.Fatalf("append %d: %+v", i, got)
+			}
+		}
+		// Two appends crossed the threshold, but the worker drains everything at
+		// once, so the second signal must not leave a wake-up with nothing to do.
+		synctest.Wait()
+		assertNoCommit(t, store)
+
+		// One request at or over the threshold trips it without help.
+		third := appendAsync(b, t.Context(), key, strings.Repeat("x", flushBytes))
+		call = receiveCommit(t, store)
+		if len(call.groups[key]) != 1 {
+			t.Fatalf("single oversized batch: %v", call.groups)
+		}
+		call.result <- commitResult{segments: []storage.Segment{
+			{Topic: key.Topic, StartOffset: 2, EndOffset: 3},
+		}}
+		if got := readReceipt(t, third); got.err != nil || got.offset != 2 {
+			t.Fatalf("oversized append: %+v", got)
+		}
+		synctest.Wait()
+		assertNoCommit(t, store)
 	})
 }

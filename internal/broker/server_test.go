@@ -77,7 +77,8 @@ func testRecords(prefix string, n int) []*objv1.Record {
 // startTestServer serves one broker over a real gRPC connection on a local port.
 func startTestServer(t *testing.T, records fetcher, interval time.Duration) (objv1.LogClient, *Broker) {
 	t.Helper()
-	b, err := New(t.Context(), &sequentialStore{}, interval)
+	// Only time triggers here: the threshold is out of reach of these payloads.
+	b, err := New(t.Context(), &sequentialStore{}, Config{FlushInterval: interval, FlushBytes: 1 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -74,10 +74,11 @@ func run() error {
 	// the server's fetcher on the read path.
 	store := storage.NewStore(objects, pg)
 
+	brokerCfg := broker.DefaultConfig()
 	// context.Background(), deliberately not sigCtx. A signal must not cancel
 	// commits that are mid-flight; shutdown below stops the broker only after
 	// GracefulStop has let those produces finish.
-	b, err := broker.New(context.Background(), store, broker.DefaultFlushInterval)
+	b, err := broker.New(context.Background(), store, brokerCfg)
 	if err != nil {
 		return err
 	}
@@ -92,8 +93,8 @@ func run() error {
 	}
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(listener) }()
-	log.Printf("broker listening on %s; bucket %s at %s; flushing every %s",
-		listener.Addr(), cfg.Bucket, cfg.Endpoint, broker.DefaultFlushInterval)
+	log.Printf("broker listening on %s; bucket %s at %s; flushing every %s or %d bytes",
+		listener.Addr(), cfg.Bucket, cfg.Endpoint, brokerCfg.FlushInterval, brokerCfg.FlushBytes)
 
 	var serveFailure error
 	select {
