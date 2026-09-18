@@ -82,7 +82,7 @@ Apply this whenever you:
 
 ## 6. Who I am (calibrate to this)
 
-*(Moved here from PROJECT.md so a new session picks it up automatically.)*
+*(Moved here from docs/PROJECT.md so a new session picks it up automatically.)*
 
 Rising sophomore CS student. Comfortable with Go, Python, Docker, Postgres, Redis, gRPC. Currently doing systems research: formal verification of HBase's region split protocol (TLA+, invariants, rollback correctness) and TLA+ specs for the CORFU shared log at NYU.
 
@@ -115,20 +115,21 @@ See section 5 for *how* to explain. This section is about *when*.
 
 ## 10. Push back, including on the plan
 
-- Argue against the plan file or PROJECT.md when they're wrong. An approved plan is not evidence.
+- Argue against the plan file or docs/PROJECT.md when they're wrong. An approved plan is not evidence.
 - Flag speculative abstractions even when a plan calls for them.
 - Push back if I'm scoping badly or building the wrong thing next.
 
 ## 11. Where things live
 
-- `PROJECT.md` — the brief: problem, architecture, data model, milestones, open questions.
-- `DECISIONS.md` — settled calls and their reasons. Read it before proposing something different; append to it when a new one is settled.
+- `docs/` — project documentation (the brief, decisions, workflow).
+- `docs/PROJECT.md` — the brief: problem, architecture, data model, milestones, open questions.
+- `docs/DECISIONS.md` — settled calls and their reasons. Read it before proposing something different; append to it when a new one is settled.
 - `~/.claude/plans/okay-read-through-the-ticklish-lovelace.md` — the M1 step-by-step plan and where we currently are in it.
 ## Engineering Learning Workflow
 
 This project uses AI for implementation without outsourcing engineering understanding.
 
-Follow `AI_ENGINEERING_WORKFLOW.md` when working on substantial features.
+Follow `docs/AI_ENGINEERING_WORKFLOW.md` when working on substantial features.
 
 Key rules:
 
@@ -146,6 +147,6 @@ Key rules:
 
 - Correct me clearly when my technical reasoning is wrong.
 
-- Maintain `LEARNING.md` for important concepts and decisions.
+- Maintain `docs/LEARNING.md` for important concepts and decisions.
 
-- Maintain `SYSTEM.md` when the system architecture meaningfully changes.
+- Maintain `docs/SYSTEM.md` when the system architecture meaningfully changes.

@@ -202,7 +202,7 @@ func dial(addr string) (*grpc.ClientConn, objv1.LogClient, error) {
 // partition" naming a value the user never typed.
 //
 // Duplicating the three common flags across both subcommands instead of
-// sharing a registration helper follows the same call DECISIONS.md records for
+// sharing a registration helper follows the same call docs/DECISIONS.md records for
 // cmd/broker's env helper: a new shared surface is not worth saving six lines.
 func partitionID(n int) (int32, error) {
 	if n < 0 || n > math.MaxInt32 {
