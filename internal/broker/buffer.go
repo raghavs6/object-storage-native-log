@@ -9,11 +9,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// frameOverhead is the 4-byte length prefix storage.EncodeRecords writes ahead
+// of each record. Counted here so a buffer's byte total equals the length of the
+// object those records would encode to; buffer_test.go checks that against the
+// real encoder rather than trusting this constant.
+const frameOverhead = 4
+
 // buffer collects records for a future storage commit. Its zero value is ready
 // to use. Records within a partition follow insertion order under mu.
 type buffer struct {
 	mu      sync.Mutex
 	pending *batch
+	// bytes is the encoded size of everything pending, reset by each drain.
+	bytes int
 }
 
 // appendResult's offset is meaningful only when err is nil.
@@ -53,21 +61,28 @@ func (b *batch) complete(segments []storage.Segment, err error) {
 // commit gives them contiguous offsets in this order. Each returned receipt
 // delivers one eventual commit result. Abandoning them does not remove the
 // records or cancel the batch. An empty slice and any nil record are rejected,
-// and a rejected call buffers nothing.
-func (b *buffer) add(key storage.PartitionKey, records []*objv1.Record) ([]<-chan appendResult, error) {
+// and a rejected call buffers nothing. The returned count is every pending
+// record's encoded size, read under the same lock that admitted these ones, so
+// a caller deciding to flush on it cannot miss a drain that raced it.
+func (b *buffer) add(key storage.PartitionKey, records []*objv1.Record) ([]<-chan appendResult, int, error) {
 	if len(records) == 0 {
-		return nil, fmt.Errorf("buffer %s/%d: no records", key.Topic, key.Partition)
+		return nil, 0, fmt.Errorf("buffer %s/%d: no records", key.Topic, key.Partition)
 	}
 	// Copy and validate everything first: a rejected record must not leave part
 	// of its request buffered.
 	copies := make([]*objv1.Record, len(records))
 	receipts := make([]chan appendResult, len(records))
 	handles := make([]<-chan appendResult, len(records))
+	// Sized locally and applied once, so a rejection leaves the running total as
+	// untouched as the batch itself.
+	var size int
 	for i, record := range records {
 		if record == nil {
-			return nil, fmt.Errorf("buffer %s/%d: nil record at index %d", key.Topic, key.Partition, i)
+			return nil, 0, fmt.Errorf("buffer %s/%d: nil record at index %d", key.Topic, key.Partition, i)
 		}
 		copies[i] = proto.Clone(record).(*objv1.Record)
+		// The copy, not the caller's record: these are the bytes that get encoded.
+		size += frameOverhead + proto.Size(copies[i])
 		receipts[i] = make(chan appendResult, 1)
 		handles[i] = receipts[i]
 	}
@@ -83,16 +98,18 @@ func (b *buffer) add(key storage.PartitionKey, records []*objv1.Record) ([]<-cha
 	}
 	b.pending.groups[key] = append(b.pending.groups[key], copies...)
 	b.pending.receipts[key] = append(b.pending.receipts[key], receipts...)
-	return handles, nil
+	b.bytes += size
+	return handles, b.bytes, nil
 }
 
-// drain transfers ownership of the current batch to the caller. New additions
-// use a separate map, so storage can process the batch without holding mu.
-// An empty buffer returns nil.
+// drain transfers ownership of the current batch to the caller and returns the
+// byte total to zero. New additions use a separate map, so storage can process
+// the batch without holding mu. An empty buffer returns nil.
 func (b *buffer) drain() *batch {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	pending := b.pending
 	b.pending = nil
+	b.bytes = 0
 	return pending
 }

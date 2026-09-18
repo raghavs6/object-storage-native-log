@@ -74,7 +74,7 @@ func (b *Broker) Append(ctx context.Context, key storage.PartitionKey, records [
 		b.mu.Unlock()
 		return 0, err
 	}
-	receipts, err := b.buffer.add(key, records)
+	receipts, _, err := b.buffer.add(key, records)
 	b.mu.Unlock()
 	if err != nil {
 		return 0, err

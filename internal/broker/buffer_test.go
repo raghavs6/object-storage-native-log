@@ -12,7 +12,7 @@ import (
 
 // addOne adds a single record, which most tests want; add itself takes a group.
 func addOne(b *buffer, key storage.PartitionKey, record *objv1.Record) (<-chan appendResult, error) {
-	receipts, err := b.add(key, []*objv1.Record{record})
+	receipts, _, err := b.add(key, []*objv1.Record{record})
 	if err != nil {
 		return nil, err
 	}
@@ -181,5 +181,62 @@ func TestBufferConcurrentAddAndDrain(t *testing.T) {
 			}
 			assertPending(t, receipts[writer][i])
 		}
+	}
+}
+
+// TestBufferByteAccounting pins the buffer's running total to the length of the
+// object its records would encode to. The identity is what a size-triggered
+// flush depends on: it is only meaningful to compare the total against an object
+// size threshold if the two are the same measurement.
+func TestBufferByteAccounting(t *testing.T) {
+	var b buffer
+	if b.bytes != 0 {
+		t.Fatalf("fresh buffer holds %d bytes, want 0", b.bytes)
+	}
+	alpha := storage.PartitionKey{Topic: "alpha", Partition: 0}
+	otherPartition := storage.PartitionKey{Topic: "alpha", Partition: 7}
+	beta := storage.PartitionKey{Topic: "beta", Partition: 0}
+	// An empty payload is a real 4-byte frame, and a payload past 127 bytes needs
+	// a two-byte protobuf length — both are natural places for the arithmetic to
+	// drift from the encoder.
+	groups := []struct {
+		key      storage.PartitionKey
+		payloads []string
+	}{
+		{alpha, []string{"first", ""}},
+		{beta, []string{string(make([]byte, 300))}},
+		{otherPartition, []string{"x"}},
+		{alpha, []string{"second", "third"}},
+	}
+	total := 0
+	for _, group := range groups {
+		records := make([]*objv1.Record, len(group.payloads))
+		for i, payload := range group.payloads {
+			records[i] = &objv1.Record{Payload: []byte(payload)}
+		}
+		var err error
+		if _, total, err = b.add(group.key, records); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A rejected call must leave the total where a successful one left it, the
+	// same all-or-nothing rule the batch itself follows.
+	if _, got, err := b.add(alpha, []*objv1.Record{{Payload: []byte("ok")}, nil}); err == nil {
+		t.Fatalf("nil record accepted, total %d", got)
+	}
+	if b.bytes != total {
+		t.Fatalf("rejected add changed the total: %d, want %d", b.bytes, total)
+	}
+
+	drained := b.drain()
+	data, _, err := storage.EncodeObject(drained.groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != len(data) {
+		t.Errorf("buffer counted %d bytes, encoded object is %d", total, len(data))
+	}
+	if b.bytes != 0 {
+		t.Errorf("drained buffer holds %d bytes, want 0", b.bytes)
 	}
 }
